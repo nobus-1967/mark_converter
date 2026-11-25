@@ -1,0 +1,3 @@
+include LICENSE README.md requirements.txt pyproject.toml
+include build_appimage.py mark-converter.desktop test_converter.py
+recursive-include assets/images *.png *.svg

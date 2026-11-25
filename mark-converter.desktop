@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Mark Converter
+Comment=Markdown Viewer & Converter built with GTK4 and libadwaita
+Exec=mark-converter
+Icon=mark-converter
+Terminal=false
+Categories=Office;Viewer;Utility;TextTools;
+MimeType=text/markdown;text/x-markdown;
+Keywords=markdown;viewer;converter;html;pdf;
+StartupWMClass=mark_converter
