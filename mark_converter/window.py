@@ -27,19 +27,33 @@ from mark_converter.helpers import (
 )
 from mark_converter.viewer import MarkdownViewer
 
+MENU_SECTIONS: tuple[tuple[tuple[str, str, str], ...], ...] = (
+    (
+        ("Open...", "app.open", "<Control>o"),
+        ("Convert...", "app.convert", "<Control>e"),
+    ),
+    (
+        ("Toggle Theme", "app.toggle-theme", "<Control><Alt>g"),
+        ("Quit", "app.quit", "<Control>q"),
+    ),
+    (("About", "app.about", ""),),
+)
 
-def _make_md_filters() -> Gio.ListStore:
-    """Return a ListStore of file filters (Markdown docs and all files)."""
-    md_filter = Gtk.FileFilter()
-    md_filter.set_name("Markdown files")
-    md_filter.add_pattern("*.md")
-    md_filter.add_pattern("*.markdown")
-    all_filter = Gtk.FileFilter()
-    all_filter.set_name("All files")
-    all_filter.add_pattern("*")
+
+def _make_filter(name: str, *patterns: str) -> Gtk.FileFilter:
+    """Create a file filter accepting *patterns*."""
+    file_filter = Gtk.FileFilter()
+    file_filter.set_name(name)
+    for pattern in patterns:
+        file_filter.add_pattern(pattern)
+    return file_filter
+
+
+def _make_filter_store(*filters: Gtk.FileFilter) -> Gio.ListStore:
+    """Collect *filters* into a Gtk.FileDialog-compatible ListStore."""
     store = Gio.ListStore.new(Gtk.FileFilter)
-    store.append(md_filter)
-    store.append(all_filter)
+    for file_filter in filters:
+        store.append(file_filter)
     return store
 
 
@@ -55,17 +69,16 @@ def conversion_settings(choice: str) -> tuple[str, str]:
     return ext, page_layout
 
 
-MENU_SECTIONS: tuple[tuple[tuple[str, str, str], ...], ...] = (
-    (
-        ("Open...", "app.open", "<Control>o"),
-        ("Convert...", "app.convert", "<Control>e"),
-    ),
-    (
-        ("Toggle Theme", "app.toggle-theme", "<Control><Alt>g"),
-        ("Quit", "app.quit", "<Control>q"),
-    ),
-    (("About", "app.about", ""),),
-)
+def _write_export(
+    ext: str, content: str, path: Path, source_file: Path | None, page_layout: str
+) -> None:
+    """Write Markdown *content* to *path* in the requested export format."""
+    if ext == ".html":
+        path.write_text(md_to_html(content, page_layout=page_layout), encoding="utf-8")
+    elif ext == ".txt":
+        path.write_text(md_to_plain(content), encoding="utf-8")
+    else:
+        md_to_pdf(content, str(path), source_file=source_file, page_layout=page_layout)
 
 
 def _add_menu_item(menu: Gio.Menu, label: str, action: str, accel: str) -> None:
@@ -129,7 +142,12 @@ class MarkConverterWindow(Gtk.ApplicationWindow):
         """Open a file chooser to select a Markdown document."""
         dialog = Gtk.FileDialog()
         dialog.set_title("Open Markdown file")
-        dialog.set_filters(_make_md_filters())
+        dialog.set_filters(
+            _make_filter_store(
+                _make_filter("Markdown files", "*.md", "*.markdown"),
+                _make_filter("All files", "*"),
+            )
+        )
         dialog.open(self, None, self._on_open_response)
 
     def _on_open_response(self, dialog, result) -> None:
@@ -171,13 +189,8 @@ class MarkConverterWindow(Gtk.ApplicationWindow):
             return
         ext, page_layout = conversion_settings(choice)
 
-        f = Gtk.FileFilter()
-        f.set_name(
-            f"{'HTML5' if ext == '.html' else 'Text' if ext == '.txt' else 'PDF'} files"
-        )
-        f.add_pattern(f"*{ext}")
-        filters = Gio.ListStore.new(Gtk.FileFilter)
-        filters.append(f)
+        label = "HTML5" if ext == ".html" else "Text" if ext == ".txt" else "PDF"
+        filters = _make_filter_store(_make_filter(f"{label} files", f"*{ext}"))
 
         base = self.current_file.name if self.current_file else "document"
         if base.endswith((".md", ".markdown")):
@@ -203,19 +216,7 @@ class MarkConverterWindow(Gtk.ApplicationWindow):
             return
         path = Path(file.get_path())
         try:
-            content = self._markdown
-            if ext == ".html":
-                html = md_to_html(content, page_layout=page_layout)
-                path.write_text(html, encoding="utf-8")
-            elif ext == ".txt":
-                path.write_text(md_to_plain(content), encoding="utf-8")
-            else:
-                md_to_pdf(
-                    content,
-                    str(path),
-                    source_file=self.current_file,
-                    page_layout=page_layout,
-                )
+            _write_export(ext, self._markdown, path, self.current_file, page_layout)
         except Exception as exc:
             show_message(self, "Convert", str(exc), "error")
             return
@@ -237,7 +238,7 @@ class MarkConverterWindow(Gtk.ApplicationWindow):
         save_theme(name)
 
     def _on_about(self) -> None:
-        """Show the About dialog with version 0.1.0 (2026.11)."""
+        """Show the About dialog with the current version and release."""
         AboutDialog(APP_NAME, VERSION, RELEASE).present()
 
     def _on_quit(self) -> None:

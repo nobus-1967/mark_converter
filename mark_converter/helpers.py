@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import subprocess
@@ -18,24 +19,28 @@ from mark_converter.constants import (
     THEMES,
 )
 
+_BLOCKQUOTE_RE = re.compile(r"^[ \t]*>+[ \t]?")
+_DEF_RE = re.compile(r"^\s*:\s+\S")
+_LIST_RE = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+\S")
+_FOOTNOTE_RE = re.compile(r"^\[\^?[^\]]+\]:\s")
+
 
 def _read_config() -> dict:
-    """Read the theme config as a dict (empty on any error)."""
-    try:
-        return json.loads(THEME_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    """Read theme.json as a dict, falling back to an empty config."""
+    with contextlib.suppress(OSError, ValueError, TypeError):
+        data = json.loads(THEME_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+    return {}
 
 
 def _write_config(**updates) -> None:
-    """Merge *updates* into theme.json, preserving existing keys (best effort)."""
-    try:
+    """Merge *updates* into theme.json, ignoring write failures."""
+    with contextlib.suppress(OSError, TypeError, ValueError):
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         data = _read_config()
         data.update(updates)
         THEME_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    except Exception:
-        pass
 
 
 def load_theme() -> str:
@@ -101,6 +106,21 @@ def render_temp_html(
     return save_temp_html(md_to_html(text, page_layout=page_layout), current_file)
 
 
+def _pdf_html_path(output: Path, source_file: Path | None) -> Path:
+    """Return a free temporary HTML path for Chromium PDF printing."""
+    if source_file is None:
+        directory, stem = output.parent, "document"
+    else:
+        directory, stem = source_file.parent.resolve(), source_file.stem
+    path = directory / f"{stem}.html"
+    if not path.exists():
+        return path
+    alternate = directory / f"~~{stem}.html"
+    if alternate.exists():
+        raise FileExistsError(f"Temporary HTML file already exists: {alternate}")
+    return alternate
+
+
 def md_to_pdf(
     text: str,
     path: str,
@@ -108,26 +128,9 @@ def md_to_pdf(
     source_file: Path | None = None,
     page_layout: str = "portrait",
 ) -> None:
-    """Save Markdown *text* as PDF through a temporary styled HTML5 file.
-
-    The HTML file is named after *source_file* (or ``document`` for an unsaved
-    buffer). If that name is taken, ``~~<stem>.html`` is used. It lives beside
-    the source so relative image links resolve and is deleted after headless
-    Chromium prints *path*.
-    """
+    """Save Markdown *text* as PDF via a temporary HTML5 file printed by Chromium."""
     output = Path(path).resolve()
-    if source_file is None:
-        directory = output.parent
-        stem = "document"
-    else:
-        directory = source_file.parent.resolve()
-        stem = source_file.stem
-    html_path = directory / f"{stem}.html"
-    if html_path.exists():
-        html_path = directory / f"~~{stem}.html"
-        if html_path.exists():
-            raise FileExistsError(f"Temporary HTML file already exists: {html_path}")
-
+    html_path = _pdf_html_path(output, source_file)
     try:
         html_path.write_text(
             md_to_html(text, page_layout=page_layout), encoding="utf-8"
@@ -136,6 +139,7 @@ def md_to_pdf(
             [
                 "chromium",
                 "--headless",
+                "--no-pdf-header-footer",
                 f"--print-to-pdf={output}",
                 str(html_path),
             ],
@@ -152,11 +156,6 @@ def md_to_pdf(
         ) from exc
     finally:
         html_path.unlink(missing_ok=True)
-
-
-_DEF_RE = re.compile(r"^\s*:\s+\S")
-
-_LIST_RE = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+\S")
 
 
 def _separate_lists(text: str) -> str:
@@ -202,7 +201,7 @@ def _strip_blockquotes(text: str) -> str:
     out: list[str] = []
     in_quote = False
     for line in text.split("\n"):
-        m = re.match(r"^[ \t]*>+[ \t]?", line)
+        m = _BLOCKQUOTE_RE.match(line)
         if m is not None:
             if not in_quote and out and out[-1].strip():
                 out.append("")
@@ -212,9 +211,6 @@ def _strip_blockquotes(text: str) -> str:
             in_quote = False
             out.append(line)
     return "\n".join(out)
-
-
-_FOOTNOTE_RE = re.compile(r"^\[\^?[^\]]+\]:\s")
 
 
 def _compact_footnotes(text: str) -> str:
@@ -262,18 +258,7 @@ def _separate_code_blocks(text: str) -> str:
 
 
 def md_to_plain(text: str) -> str:
-    """Strip Markdown syntax to produce plain text.
-
-    Removes block syntax (code fences, heading markers, horizontal rules,
-    ``::`` markers, empty pipe rows), normalizes table alignment rows
-    (``:---:`` / ``:---`` / ``---:`` to ``---``) and preserves ``| === |``
-    footer separators and the ordered/unordered/todo/definition list markers
-    (``1. ``/``- ``/``* ``, with definition ``: `` converted to ``- ``), keeps
-    a blank line before blockquotes and lists (ordered, unordered, todo and
-    definition lists) and after fenced code blocks, keeps footnote definitions
-    adjacent (no blank line after them), strips known curly-brace extension
-    markers only, removes inline emphasis, and collapses blank lines.
-    """
+    """Strip Markdown syntax while preserving list, quote and table structure."""
     text = _separate_code_blocks(text)
     text = re.sub(r"^```[^\n]*\n?", "", text, flags=re.MULTILINE)
     text = re.sub(r"^#+\s?", "", text, flags=re.MULTILINE)

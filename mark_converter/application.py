@@ -17,7 +17,7 @@ from mark_converter.helpers import load_theme
 
 
 class MarkConverterApp(Gtk.Application):
-    """Application owning the single viewer window and its four commands."""
+    """Application owning the single viewer window and its menu actions."""
 
     def __init__(self) -> None:
         """Initialize the application with open-file support."""
@@ -25,6 +25,7 @@ class MarkConverterApp(Gtk.Application):
             application_id=APP_ID,
             flags=Gio.ApplicationFlags.HANDLES_OPEN,
         )
+        self._window = None
         self.connect("activate", self._on_activate)
         self.connect("startup", self._on_startup)
         self.connect("open", self._on_open_files)
@@ -48,7 +49,7 @@ class MarkConverterApp(Gtk.Application):
 
     def _on_open_files(self, _app, files, _n_files, _hint) -> None:
         """Load the first Markdown file passed on the command line."""
-        window = getattr(self, "_window", None)
+        window = self._window
         if window is None:
             self._on_activate(self)
             window = self._window
@@ -63,18 +64,24 @@ class MarkConverterApp(Gtk.Application):
         action.connect("activate", callback)
         self.add_action(action)
 
+    def _run_window_action(self, handler: str) -> None:
+        """Call a named handler on the viewer window when it exists."""
+        if self._window is not None:
+            getattr(self._window, handler)()
+
     def _setup_actions(self) -> None:
-        """Create the only actions available in the hamburger menu."""
-
-        def _w():
-            """Return the current viewer window."""
-            return getattr(self, "_window", None)
-
-        self._add_action("open", lambda a, p: _w() and _w()._on_open())
-        self._add_action("convert", lambda a, p: _w() and _w()._on_convert())
-        self._add_action("toggle-theme", lambda a, p: _w() and _w()._on_toggle_theme())
-        self._add_action("quit", lambda a, p: _w() and _w()._on_quit())
-        self._add_action("about", lambda a, p: _w() and _w()._on_about())
+        """Create the five actions available in the hamburger menu."""
+        actions = {
+            "open": "_on_open",
+            "convert": "_on_convert",
+            "toggle-theme": "_on_toggle_theme",
+            "quit": "_on_quit",
+            "about": "_on_about",
+        }
+        for name, handler in actions.items():
+            self._add_action(
+                name, lambda *_args, handler=handler: self._run_window_action(handler)
+            )
 
     def _setup_shortcuts(self) -> None:
         """Bind the four keyboard shortcuts kept from the editor."""

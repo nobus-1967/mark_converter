@@ -6,7 +6,7 @@ from pathlib import Path
 
 APP_NAME = "Mark Converter"
 APP_ID = "com.github.mark_converter"
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 RELEASE = "2026.11"
 
 CONFIG_DIR = Path.home() / ".config" / "mark_converter"

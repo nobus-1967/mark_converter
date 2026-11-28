@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for Mark Converter 0.1.0 (GTK4 / WebKitGTK)."""
+"""Tests for Mark Converter 0.1.1 (GTK4 / WebKitGTK)."""
 
 from __future__ import annotations
 
@@ -60,10 +60,10 @@ class TestAppMetadata(unittest.TestCase):
     """Check static application metadata."""
 
     def test_identity(self):
-        """Name, id, version and release describe Mark Converter 0.1.0."""
+        """Name, id, version and release describe Mark Converter 0.1.1."""
         self.assertEqual(APP_NAME, "Mark Converter")
         self.assertEqual(APP_ID, "com.github.mark_converter")
-        self.assertEqual(VERSION, "0.1.0")
+        self.assertEqual(VERSION, "0.1.1")
         self.assertEqual(RELEASE, "2026.11")
 
     def test_themes(self):
@@ -89,6 +89,14 @@ class TestThemeStorage(_IsolatedConfigMixin, unittest.TestCase):
 
         save_theme("blue")
         self.assertEqual(load_theme(), DEFAULT_THEME)
+
+    def test_invalid_json_falls_back(self):
+        """A malformed theme.json falls back to the default."""
+        import mark_converter.helpers as mh
+
+        mh.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        mh.THEME_FILE.write_text("{broken", encoding="utf-8")
+        self.assertEqual(mh.load_theme(), DEFAULT_THEME)
 
 
 class TestTempHtml(_IsolatedConfigMixin, unittest.TestCase):
@@ -163,6 +171,45 @@ class TestConversion(unittest.TestCase):
             self.assertTrue(out.read_bytes().startswith(b"%PDF"))
             self.assertFalse((Path(folder) / "doc.html").exists())
 
+    def test_pdf_chromium_command(self):
+        """PDF export uses headless Chromium without a header or footer."""
+        from mark_converter.helpers import md_to_pdf
+
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "doc.md"
+            source.write_text("# PDF", encoding="utf-8")
+            out = Path(folder) / "doc.pdf"
+            html_path = source.parent / "doc.html"
+            with mock.patch("mark_converter.helpers.subprocess.run") as run:
+                md_to_pdf("# PDF", str(out), source_file=source)
+            self.assertEqual(
+                run.call_args.args[0],
+                [
+                    "chromium",
+                    "--headless",
+                    "--no-pdf-header-footer",
+                    f"--print-to-pdf={out.resolve()}",
+                    str(html_path),
+                ],
+            )
+            self.assertFalse(html_path.exists())
+
+    def test_pdf_html_path_collision(self):
+        """PDF export falls back to a ~~-prefixed HTML file when needed."""
+        from mark_converter.helpers import _pdf_html_path
+
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "doc.md"
+            output = Path(folder) / "doc.pdf"
+            primary = source.parent / "doc.html"
+            primary.write_text("keep", encoding="utf-8")
+            self.assertEqual(
+                _pdf_html_path(output, source), source.parent / "~~doc.html"
+            )
+            (source.parent / "~~doc.html").write_text("keep", encoding="utf-8")
+            with self.assertRaises(FileExistsError):
+                _pdf_html_path(output, source)
+
     def test_convert_formats(self):
         """HTML5 landscape is removed; PDF landscape remains."""
         self.assertEqual(
@@ -206,18 +253,12 @@ class TestMenuModel(unittest.TestCase):
 
     def test_shortcuts(self):
         """The four editor shortcuts are registered on the application."""
-        import gi
+        from mark_converter import application as app_module
 
-        gi.require_version("Gtk", "4.0")
-        from gi.repository import Gtk
-
-        app = Gtk.Application(application_id=f"{APP_ID}.test.shortcuts")
-        app.register()
+        with mock.patch.object(app_module, "APP_ID", f"{APP_ID}.test.shortcuts"):
+            converter_app = app_module.MarkConverterApp()
+        converter_app.register()
         try:
-            from mark_converter.application import MarkConverterApp
-
-            converter_app = MarkConverterApp()
-            converter_app.register()
             self.assertEqual(
                 converter_app.get_accels_for_action("app.open"), ["<Control>o"]
             )
@@ -231,9 +272,23 @@ class TestMenuModel(unittest.TestCase):
             self.assertEqual(
                 converter_app.get_accels_for_action("app.quit"), ["<Control>q"]
             )
-            converter_app.quit()
         finally:
-            app.quit()
+            converter_app.quit()
+
+    def test_actions(self):
+        """All five menu commands are registered as application actions."""
+        from mark_converter import application as app_module
+
+        with mock.patch.object(app_module, "APP_ID", f"{APP_ID}.test.actions"):
+            converter_app = app_module.MarkConverterApp()
+        converter_app.register()
+        try:
+            self.assertEqual(
+                sorted(converter_app.list_actions()),
+                ["about", "convert", "open", "quit", "toggle-theme"],
+            )
+        finally:
+            converter_app.quit()
 
 
 class _GtkTestCase(_IsolatedConfigMixin, unittest.TestCase):
@@ -372,13 +427,13 @@ class TestViewerWindow(_GtkTestCase):
         )
 
     def test_about_version(self):
-        """The About dialog shows version 0.1.0 (2026.11)."""
+        """The About dialog shows version 0.1.1 (2026.11)."""
         from mark_converter.dialogs import AboutDialog
 
         dlg = AboutDialog(APP_NAME, VERSION, RELEASE)
         text = " ".join(self._labels(dlg))
         self.assertIn("Mark Converter", text)
-        self.assertIn("version 0.1.0 (2026.11)", text)
+        self.assertIn("version 0.1.1 (2026.11)", text)
 
 
 if __name__ == "__main__":
